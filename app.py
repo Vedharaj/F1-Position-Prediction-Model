@@ -11,10 +11,22 @@ st.set_page_config(
     layout="wide"
 )
 
-# -----------------------
-# Load model
-# -----------------------
+# -----------------------------
+# Load Model
+# -----------------------------
 model = joblib.load("f1_position_model.pkl")
+
+# -----------------------------
+# Load datasets
+# -----------------------------
+results_df = pd.read_csv("dataset/results.csv")
+circuits_df = pd.read_csv("dataset/f1_circuits_data.csv")
+
+# clean numeric
+results_df["position"] = results_df["positionOrder"]
+results_df["points"] = pd.to_numeric(results_df["points"], errors="coerce").fillna(0)
+
+results_df = results_df.sort_values("raceId")
 
 # -----------------------
 # Dictionaries (name → id)
@@ -25,18 +37,78 @@ constructors= {'McLaren': 1, 'BMW Sauber': 2, 'Williams': 3, 'Renault': 4, 'Toro
 circuits= {'Melbourne, Australia': 1, 'Kuala Lumpur, Malaysia': 2, 'Sakhir, Bahrain': 3, 'Montmeló, Spain': 4, 'Istanbul, Turkey': 5, 'Monte-Carlo, Monaco': 6, 'Montreal, Canada': 7, 'Magny Cours, France': 8, 'Silverstone, UK': 9, 'Hockenheim, Germany': 10, 'Budapest, Hungary': 11, 'Valencia, Spain': 12, 'Spa, Belgium': 13, 'Monza, Italy': 14, 'Marina Bay, Singapore': 15, 'Oyama, Japan': 16, 'Shanghai, China': 17, 'São Paulo, Brazil': 18, 'Indianapolis, USA': 19, 'Nürburg, Germany': 20, 'Imola, Italy': 21, 'Suzuka, Japan': 22, 'Las Vegas, United States': 80, 'Abu Dhabi, UAE': 24, 'Buenos Aires, Argentina': 25, 'Jerez de la Frontera, Spain': 26, 'Estoril, Portugal': 27, 'Okayama, Japan': 28, 'Adelaide, Australia': 29, 'Midrand, South Africa': 30, 'Castle Donington, UK': 31, 'Mexico City, Mexico': 32, 'Phoenix, USA': 33, 'Le Castellet, France': 34, 'Yeongam County, Korea': 35, 'Rio de Janeiro, Brazil': 36, 'Detroit, USA': 37, 'Kent, UK': 38, 'Zandvoort, Netherlands': 39, 'Heusden-Zolder, Belgium': 40, 'Dijon, France': 41, 'Dallas, USA': 42, 'California, USA': 60, 'Nevada, USA': 44, 'Madrid, Spain': 45, 'New York State, USA': 46, 'Anderstorp, Sweden': 47, 'Ontario, Canada': 48, 'Barcelona, Spain': 67, 'Brussels, Belgium': 50, 'Clermont-Ferrand, France': 51, 'Quebec, Canada': 52, 'Rouen, France': 53, 'Le Mans, France': 54, 'Reims, France': 55, 'Eastern Cape Province, South Africa': 56, 'Styria, Austria': 57, 'Liverpool, UK': 58, 'Oporto, Portugal': 59, 'Berlin, Germany': 61, 'Lisbon, Portugal': 62, 'Florida, USA': 63, 'Casablanca, Morocco': 64, 'Pescara, Italy': 65, 'Bern, Switzerland': 66, 'Uttar Pradesh, India': 68, 'Austin, USA': 69, 'Spielberg, Austria': 70, 'Sochi, Russia': 71, 'Baku, Azerbaijan': 73, 'Portimão, Portugal': 75, 'Mugello, Italy': 76, 'Jeddah, Saudi Arabia': 77, 'Al Daayen, Qatar': 78, 'Miami, USA': 79}
 
 
-# -----------------------
-# UI
-# -----------------------
+# ------------------------------------------------
+# Helper: window stats
+# ------------------------------------------------
 
-st.title("🏎️ F1 Race Position Predictor")
+def calc_stats(df, window):
 
-st.write("Select race parameters and predict finishing position")
+    last = df.tail(window)
 
-tab1, tab3 = st.tabs([
-    "Single Prediction",
-    "Bulk Prediction (Paste CSV)"
-])
+    pos = last["position"].mean() if not last.empty else 10
+    pts = last["points"].mean() if not last.empty else 0
+
+    return pos, pts
+
+
+# ------------------------------------------------
+# Feature Engineering
+# ------------------------------------------------
+
+def get_stats(driver_id, constructor_id, race_id):
+
+    driver_hist = results_df[
+        (results_df.driverId == driver_id) &
+        (results_df.raceId < race_id)
+    ]
+
+    constructor_hist = results_df[
+        (results_df.constructorId == constructor_id) &
+        (results_df.raceId < race_id)
+    ]
+
+    # driver windows
+    d3_pos, d3_pts = calc_stats(driver_hist, 3)
+    d5_pos, d5_pts = calc_stats(driver_hist, 5)
+    d10_pos, d10_pts = calc_stats(driver_hist, 10)
+
+    d_all_pos = driver_hist["position"].mean() if not driver_hist.empty else 10
+    d_all_pts = driver_hist["points"].mean() if not driver_hist.empty else 0
+
+    # constructor windows
+    c3_pos, c3_pts = calc_stats(constructor_hist, 3)
+    c5_pos, c5_pts = calc_stats(constructor_hist, 5)
+    c10_pos, c10_pts = calc_stats(constructor_hist, 10)
+
+    c_all_pos = constructor_hist["position"].mean() if not constructor_hist.empty else 10
+    c_all_pts = constructor_hist["points"].mean() if not constructor_hist.empty else 0
+
+    return [
+        d3_pos,
+        d5_pos,
+        d10_pos,
+        d_all_pos,
+
+        d3_pts,
+        d5_pts,
+        d10_pts,
+        d_all_pts,
+
+        c3_pos,
+        c5_pos,
+        c10_pos,
+        c_all_pos,
+
+        c3_pts,
+        c5_pts,
+        c10_pts,
+        c_all_pts
+    ]
+
+
+# ------------------------------------------------
+# Fuzzy match helper
+# ------------------------------------------------
 
 def find_best_match(text, dictionary):
 
@@ -50,28 +122,45 @@ def find_best_match(text, dictionary):
 
     return 0
 
-# =========================================================
-# TAB 1 — EXISTING SINGLE PREDICTION (UNCHANGED)
-# =========================================================
+
+# ------------------------------------------------
+# UI
+# ------------------------------------------------
+
+st.title("🏎️ F1 Race Position Predictor")
+
+tab1, tab2 = st.tabs([
+    "Single Prediction",
+    "Bulk Prediction"
+])
+
+
+# =================================================
+# TAB 1
+# =================================================
 
 with tab1:
 
-    st.write("Select race parameters and predict finishing position")
-
     grid = st.slider("Grid Position", 1, 20)
 
+    race_id = st.number_input(
+        "Race ID",
+        min_value=1,
+        value=1100
+    )
+
     driver_name = st.selectbox(
-        "Search Driver",
+        "Driver",
         sorted(drivers.keys())
     )
 
     constructor_name = st.selectbox(
-        "Search Constructor",
+        "Constructor",
         sorted(constructors.keys())
     )
 
     circuit_name = st.selectbox(
-        "Search Circuit",
+        "Circuit",
         sorted(circuits.keys())
     )
 
@@ -84,143 +173,111 @@ with tab1:
     constructor_id = constructors[constructor_name]
     circuit_id = circuits[circuit_name]
 
+    # get circuit features
+    circuit_row = circuits_df[circuits_df["circuitId"] == circuit_id]
+
+    laps = circuit_row["Laps"].values[0]
+    corners = circuit_row["Corners"].values[0]
+
     if st.button("Predict Result"):
 
-        features = np.array([[grid, driver_id, constructor_id, circuit_id, year]])
+        stats = get_stats(
+            driver_id,
+            constructor_id,
+            race_id
+        )
+
+        features = np.array([[
+            grid,
+            driver_id,
+            constructor_id,
+            circuit_id,
+            year,
+            laps,
+            corners,
+            *stats
+        ]])
 
         prediction = model.predict(features)
 
         st.success(f"🏁 Predicted Position: {int(prediction[0])}")
 
 
-# =========================================================
-# TAB 2 — CSV BULK RACE PREDICTION
-# =========================================================
+# =================================================
+# TAB 2
+# =================================================
 
-# with tab2:
-
-#     st.subheader("Upload Race Grid CSV")
-
-#     st.write("Upload a CSV like:")
-
-#     st.code(
-# """
-# Grid,Driver,Team
-# 1,George Russell,Mercedes
-# 2,Kimi Antonelli,Mercedes
-# 3,Charles Leclerc,Ferrari
-# """
-# )
-    
-#     # Circuit and Year selectors for bulk prediction
-#     circuit_name_bulk = st.selectbox(
-#         "Select Circuit",
-#         sorted(circuits.keys()),
-#         key="bulk_circuit"
-#     )
-    
-#     year_bulk = st.selectbox(
-#         "Select Year",
-#         list(range(2000, 2027)),
-#         key="bulk_year"
-#     )
-
-#     uploaded_file = st.file_uploader("Upload CSV", type=["csv"])
-
-#     if uploaded_file:
-
-#         df = pd.read_csv(uploaded_file)
-
-#         st.dataframe(df)
-
-#         predictions = []
-
-#         for _, row in df.iterrows():
-
-#             grid_val = int(row["Grid"])
-#             driver_name = row["Driver"]
-#             team_name = row["Team"]
-
-#             driver_id = find_best_match(driver_name, drivers)
-#             constructor_id = find_best_match(team_name, constructors)
-
-#             features = np.array([
-#                 [grid_val, driver_id, constructor_id, circuit_id_bulk, year_bulk]
-#             ])
-
-#             pred = model.predict(features)[0]
-
-#             predictions.append(pred)
-
-#         df["Predicted_Position"] = predictions
-
-#         # ensure unique positions
-#         df = df.sort_values("Predicted_Position")
-#         df["Predicted_Position"] = range(1, len(df)+1)
-
-#         st.subheader("🏁 Predicted Race Result")
-
-#         st.dataframe(
-#             df[["Predicted_Position","Grid","Driver","Team"]]
-#         )
-        
-
-# =========================================================
-# TAB 3 — PASTE CSV TEXT
-# =========================================================
-
-with tab3:
-
-    st.subheader("Paste CSV Data")
+with tab2:
 
     csv_text = st.text_area("Paste CSV")
-    
-    # Circuit and Year selectors for bulk prediction
+
+    race_id_bulk = st.number_input(
+        "Race ID",
+        min_value=1,
+        value=1100,
+        key="bulk_race"
+    )
+
     circuit_name_bulk = st.selectbox(
-        "Select Circuit",
+        "Circuit",
         sorted(circuits.keys()),
         key="bulk_circuit"
     )
 
     year_bulk = st.selectbox(
-        "Select Year",
+        "Year",
         list(range(2000, 2027)),
         key="bulk_year"
     )
 
-circuit_id_bulk = circuits[circuit_name_bulk]
+    circuit_id_bulk = circuits[circuit_name_bulk]
 
-if st.button("Predict From Pasted CSV"):
+    circuit_row = circuits_df[circuits_df["circuitId"] == circuit_id_bulk]
 
-    if csv_text.strip():
+    laps_bulk = circuit_row["Laps"].values[0]
+    corners_bulk = circuit_row["Corners"].values[0]
 
-        df = pd.read_csv(StringIO(csv_text))
+    if st.button("Predict From CSV"):
 
-        predictions = []
-        
+        if csv_text.strip():
 
-        for _, row in df.iterrows():
+            df = pd.read_csv(StringIO(csv_text))
 
-            grid_val = int(row["Grid"])
-            driver_name = row["Driver"]
-            team_name = row["Team"]
+            predictions = []
 
-            driver_id = find_best_match(driver_name, drivers)
-            constructor_id = find_best_match(team_name, constructors)
+            for _, row in df.iterrows():
 
-            features = np.array([
-                [grid_val, driver_id, constructor_id, circuit_id_bulk, year_bulk]
-            ])
+                grid_val = int(row["Grid"])
+                driver_name = row["Driver"]
+                team_name = row["Team"]
 
-            pred = model.predict(features)[0]
+                driver_id = find_best_match(driver_name, drivers)
+                constructor_id = find_best_match(team_name, constructors)
 
-            predictions.append(pred)
+                stats = get_stats(
+                    driver_id,
+                    constructor_id,
+                    race_id_bulk
+                )
 
-        df["Predicted_Position"] = predictions
+                features = np.array([[
+                    grid_val,
+                    driver_id,
+                    constructor_id,
+                    circuit_id_bulk,
+                    year_bulk,
+                    laps_bulk,
+                    corners_bulk,
+                    *stats
+                ]])
 
-        df = df.sort_values("Predicted_Position")
-        df["Predicted_Position"] = range(1, len(df)+1)
+                pred = model.predict(features)[0]
 
-        df = df.reset_index(drop=True)
+                predictions.append(pred)
 
-        st.dataframe(df, hide_index=True)
+            df["Predicted_Position"] = predictions
+
+            df = df.sort_values("Predicted_Position")
+            df["Predicted_Position"] = range(1, len(df)+1)
+
+            st.dataframe(df)
